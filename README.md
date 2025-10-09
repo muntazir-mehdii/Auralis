@@ -1,2 +1,2 @@
 # Auralis
-The AI Integrated INTRADAY Trading Bot
+AI Integrated INTRADAY Trading Bot
