@@ -11,3 +11,6 @@ fastparquet==2024.5.0
 
 # (Optional but common)
 python-dateutil==2.9.0.post0
+
+xgboost
+scikit-learn
