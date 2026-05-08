@@ -1,357 +1,178 @@
-Auralis — Assignment 1: Problem & Data Understanding
+# Auralis — AI-Powered Prediction & Automation Pipeline
 
-Project focus: Asian Session Liquidity Sweep (ASLS) during London session on XAUUSD (M5).
-Scope of A1: data sourcing, preprocessing/labeling, a strict mechanical baseline backtest, and EDA figures to understand behavior and metrics before optimization/ML.
+> Quantitative research project analyzing the **Asian Session Liquidity Sweep (ASLS)** in the London session for **XAUUSD**. Includes data labeling, rule-based backtesting, strategy optimization, and an XGBoost ML filter — tested across 2018–2025 market data.
 
-1) What this repository contains
+---
+
+## Final Results
+
+| Stage | Model | Return | Win Rate |
+|-------|-------|--------|----------|
+| A1 | Mechanical Baseline | ~8 R | ~33% |
+| A2 | Optimized Baseline (Retracement) | 15.58 R | ~34% |
+| A3 | XGBoost Model V1 | -8.25 R | ~32% |
+| **A3** | **XGBoost Model V2 (Final)** | **+94.92 R** | **36.23%** |
+
+**Model V2 outperformed the rule-based baseline by 6×.**
+
+---
+
+## Repository Structure
+
+```
 Auralis/
-├─ data/
-│  ├─ raw/                         # (not included in submission; large)
-│  └─ labels/
-│     └─ auralis_labels.parquet    # produced by labeler.py (or small sample)
-├─ pipelines/
-│  ├─ labeler.py                   # builds Asian session range + signals
-│  └─ backtest_baseline.py         # strict baseline executor (RR=2/3 variants)
-├─ tools/
-│  └─ make_backtest_report.py      # exports multi-page PDF + PNG charts
-├─ reports/
-│  ├─ baseline_2025.csv            # example output (trade log)
-│  └─ figures/                     # auto-generated plots (PNG + PDF)
-├─ plots/                          # your LaTeX-ready PDFs (full-width figures)
-│  ├─ baseline_2025_equity.pdf
-│  ├─ DrawDownCurve_Date.pdf
-│  ├─ DistributionPerTrade.pdf
-│  ├─ PerTrade_RScatter.pdf
-│  ├─ WinRate_time.pdf
-│  └─ MonthlyPerformace.pdf
-├─ main.tex                        # LaTeX Assignment 1 report
-├─ README.md
-└─ requirements.txt
+├── data/
+│   ├── raw/                          # Raw OHLCV data (not included; large)
+│   └── labels/
+│       └── auralis_labels.parquet    # Produced by labeler.py
+├── pipelines/
+│   ├── labeler.py                    # Asian session range + signal builder
+│   ├── backtest_baseline.py          # Baseline executor (RR=2/3 variants)
+│   ├── backtest_baseline_optimized.py
+│   ├── signals_v1.py                 # ML feature dataset (V1)
+│   ├── signals_v2.py                 # ML feature dataset (V2, final)
+│   └── retrace_entry.py
+├── models/
+│   ├── model_proposed.py             # XGBoost V1
+│   ├── model_proposed_v2.py          # XGBoost V2 (final)
+│   └── xgb_filter_v2.json            # Saved trained classifier
+├── results/
+│   ├── proposed_v2_thr_50.csv        # Best backtest (θ=0.50)
+│   ├── baseline_vs_proposed.csv      # Threshold sweep summary
+│   └── confusion_matrix_v2.csv
+├── tools/
+│   ├── make_backtest_report.py       # Auto-generates PDF + PNG figures
+│   └── make_assignment3_figures.py
+├── plots/                            # LaTeX-ready output figures
+├── reports/                          # CSV trade logs + figure exports
+├── main.tex                          # LaTeX report
+└── requirements.txt
+```
 
+---
 
-For grading, raw historical data isn’t required; we provide scripts and instructions to reproduce labels and plots.
+## Problem Summary
 
-2) Problem summary
+During **00:00–06:00 UTC** (Asian session), XAUUSD often forms a tight liquidity range. After the London open (~07:00–10:00 UTC), price frequently sweeps one side of that range and reverses.
 
-During 00:00–06:00 UTC (Asian session) XAUUSD often forms a tight range (liquidity pool). After London open (≈07:00–10:00 UTC), price often sweeps one side of that range and reverses. We formalize a fully mechanical approach to:
+Auralis formalizes a fully mechanical approach to:
+- Detect the Asian session range
+- Label sweep + confirmation signals
+- Execute a strict risk model (hard SL + fixed RR targets)
+- Evaluate behavior with consistent metrics and plots
 
-detect the Asian range,
+---
 
-label sweep + confirmation,
+## Pipeline — 3 Stages
 
-execute a strict risk model (hard SL with buffer; fixed RR targets),
+### Stage 1 — Data & Labeling
 
-evaluate the behavior with consistent metrics/plots.
+**Instrument:** XAUUSD (M5), 2018–2025, UTC timestamps
 
-3) Data and labeling (A1)
+**Labeling logic (`pipelines/labeler.py`):**
+- Compute per-day Asia High/Low between 00:00–06:00 UTC
+- Sweep: candle breaks outside the Asian box
+- Confirmation: price re-closes inside within 1–2 bars
+- Outputs `entry_long`, `entry_short` booleans → saved as `.parquet`
 
-Instrument: XAUUSD (Spot Gold), M5 (some M1 support for verification).
+> ⚠️ All timestamps are UTC. Misaligned timezones will degrade signals.
 
-Span: 2018–2025, UTC timestamps.
+---
 
-Labeling (pipelines/labeler.py):
+### Stage 2 — Strategy Optimization
 
-Compute per-day Asia High/Low between 00:00–06:00 UTC.
+**Key additions over baseline:**
 
-Sweep: candle breaks outside the Asian box.
+- **Asia Range Filters** — skip low-quality days (range too tight/wide, holiday chop, unfavorable volatility)
+- **Retracement Entry Model** — wait for BOS/MSS candle after sweep, enter on retracement, SL outside wick, TP 80% at 2R + runner to BE
+- **EMA Bias Filter** — directional confirmation before entry
+- **5-year backtest** — full 2018–2025 run with next-bar execution
 
-Confirmation: re-close back inside within 1–2 bars.
+Best variant: `reports/baseline_D_2R_retrace.csv` → **15.58 R**
 
-Emit booleans entry_long, entry_short, and confirmations.
+---
 
-Save to data/labels/auralis_labels.parquet (Parquet).
+### Stage 3 — XGBoost ML Filter
 
-Important: All times are in UTC (not PKT). Misaligned timezones will degrade signals and session filters.
+Two models trained to classify trade quality (high vs low probability):
 
-4) Baseline executor (A1)
+**Model V1** — basic ASLS feature set → **-8.25 R** (underfitting, weak features)
 
-File: pipelines/backtest_baseline.py
+**Model V2 (Final)** — advanced feature engineering:
+- Regime features (volatility, trending vs ranging)
+- Momentum features (price velocity, session bias)
+- Microstructure features (spread, candle body ratios)
 
-Session: Allow entries only during London (default 07:00–11:00 UTC).
+Result: **+94.92 R** at θ=0.50 threshold — best performance across all Auralis tests.
 
-Stops/Targets:
+---
 
-Hard SL at wick/Asia boundary with configurable buffer (e.g., $0.5).
+## How to Run
 
-Options tested: full exit @ 2R or full exit @ 3R; hybrid partials are supported in other variants.
+### Setup
 
-Management window: manage trade up to min(LONDON_END+2h, 20:00 UTC).
-
-Outputs: CSV trade log + cumulative results (R-multiples).
-
-5) EDA and figures (A1)
-
-File: tools/make_backtest_report.py
-Reads one or more backtest CSVs and produces:
-
-A multi-page PDF (reports/figures/backtest_figures.pdf)
-
-Individual PNG images for LaTeX (reports/figures/*.png)
-
-Figures we use in the LaTeX report (you also exported PDFs to plots/):
-
-Equity: baseline_2025_equity.pdf
-
-Drawdown: DrawDownCurve_Date.pdf
-
-Per-trade distribution: DistributionPerTrade.pdf
-
-Per-trade scatter: PerTrade_RScatter.pdf
-
-Win rate vs hour: WinRate_time.pdf
-
-Monthly performance: MonthlyPerformace.pdf
-
-These confirm: positive expectancy with asymmetric payoffs (few 2R–3R winners drive gains), drawdown ≈ 11R in the 2025 snapshot, and strongest behavior near 08:00–09:00 UTC.
-
-6) How to run (Windows PowerShell examples)
-6.1 Install environment
+```bash
 python -m venv .venv
-. .\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1       # Windows PowerShell
 pip install -r requirements.txt
+```
 
-6.2 Generate labels (creates data/labels/auralis_labels.parquet)
+### Stage 1 — Generate Labels
+
+```bash
 python pipelines\labeler.py
+# Output: data/labels/auralis_labels.parquet
+```
 
-6.3 Run the baseline backtest (creates reports\baseline_2025.csv)
-python pipelines\backtest_baseline.py
+### Stage 2 — Run Optimized Backtest
 
-6.4 Export report figures (multi-page PDF + PNGs)
-python tools\make_backtest_report.py `
-  --inputs "reports\baseline_2025.csv" `
-  --outdir "reports\figures" `
-  --title "Auralis — Baseline 2025"
-
-
-(Use backticks for line breaks in PowerShell; use ^ in CMD or run on one line.)
-
-2) Summary of Improvements in A2
-
-Assignment 2 focuses on building a robust baseline across 2018–2025.
-Main additions include:
-
-• Asia Range Filters
-
-Skip low-quality days where:
-
-Asia range is too tight or too wide
-
-Chop-zones around major holidays
-
-Unfavorable volatility regimes
-
-• Retracement Entry Model (Best Variant in A2)
-
-After the sweep:
-
-Wait for a strong BOS/MSS candle
-
-Enter only on retracement back into a fair price area
-
-SL outside the sweep wick
-
-TP: 80% at 2R, runner to BE (mirrors real SMC logic)
-
-This produced:
-
-Higher expectancy
-
-Cleaner entries
-
-Reduced drawdowns
-
-Best overall performance in A2
-Saved as:
-reports/baseline_D_2R_retrace.csv
-
-• 5-Year Backtest
-
-pipelines/backtest_baseline_optimized.py
-Runs a full 2018–2025 historical backtest using:
-
-Next-bar execution
-
-EMA bias
-
-Asia filter
-
-Retracement logic
-
-3) How to Run Assignment 2
-(1) Activate environment
-. .\.venv\Scripts\Activate.ps1
-
-(2) Run the optimized 5-year baseline
+```bash
 python pipelines\backtest_baseline_optimized.py
+# Output: reports/baseline_2018_2025_baseline.csv
 
-
-Outputs:
-
-reports\baseline_2018_2025_baseline.csv
-
-(3) Run individual variants
-python pipelines\rr2_fulltp.py
-python pipelines\rr3_fulltp.py
-python pipelines\retrace_entry.py
-
-(4) Generate A2 figures
 python tools\make_backtest_report.py `
   --inputs "reports\baseline_D_2R_retrace.csv" `
   --outdir "reports\figures_optimized" `
-  --title "Auralis — Optimized Baseline Variants"
+  --title "Auralis — Optimized Baseline"
+```
 
-Assignment 3 — Machine Learning Filter (XGBoost)
+### Stage 3 — Train ML Model & Backtest
 
-Assignment 3 introduces Machine Learning classification to filter out low-probability trades and improve overall profitability.
-
-This stage contains two ML models:
-
-Model 1 → model_proposed
-(Basic ASLS feature set, Version 1)
-
-Model 2 → model_proposed_v2
-(Improved feature engineering, regime/momentum/microstructure — final model)
-
-Model 2 is the best performer and forms the final Assignment-3 submission.
-
-1) What Assignment 3 Adds
-Auralis/
-├─ pipelines/
-│  ├─ signals_v1.py                      # build feature dataset (V1)
-│  ├─ signals_v2.py                      # improved feature set (V2)
-│  └─ build_signals_dataset.py           # helper/diagnostic builder
-├─ models/
-│  ├─ model_proposed.py                  # ML Model V1
-│  ├─ model_proposed_v2.py               # ML Model V2 (final)
-│  └─ xgb_filter_v2.json                 # saved trained classifier
-├─ results/
-│  ├─ proposed_v2_thr_50.csv             # backtest (θ=0.50 optimal)
-│  ├─ baseline_vs_proposed.csv           # threshold sweep summary
-│  ├─ confusion_matrix_v2.csv            # 2x2 matrix output
-│  └─ proposed_v1_*.csv                  # Model 1 results (negative)
-└─ tools/
-   └─ make_assignment3_figures.py        # auto-generates all plots
-
-2) Assignment 3 Workflow
-Step 1 — Build ML Signals Dataset (Features + Labels)
-
-For Model 1:
-
-python pipelines\signals_v1.py
-
-
-For Model 2:
-
+```bash
+# Build features
 python pipelines\signals_v2.py
 
-
-This produces:
-
-data/signals/auralis_signals_v2.parquet
-
-Step 2 — Train ML Model
-Model 1 (Version 1)
-python run_experiment.py
-
-Model 2 (Version 2 — Final)
+# Train XGBoost V2
 python run_experiments_v2.py
+# Outputs: models/xgb_filter_v2.json, results/proposed_v2_thr_50.csv
 
-
-This saves:
-
-models/xgb_filter_v2.json
-results/confusion_matrix_v2.csv
-results/proposed_v2_thr_50.csv
-
-Step 3 — Backtest with Probability Thresholds
-
-Run threshold sweeps (0.05 → 0.95):
-
-python run_experiments_v2.py
-
-
-This produces the comparison table:
-
-results/baseline_vs_proposed.csv
-
-Step 4 — Generate Assignment 3 Figures (Automatic)
-
-Just press F5 on:
-
-tools/make_assignment3_figures.py
-
-
-Or run:
-
+# Generate figures
 python tools\make_assignment3_figures.py
+```
 
+---
 
-Outputs include:
+## Output Figures
 
-plots/proposed_v2/equity_curve.png
-plots/proposed_v2/threshold_sweep.png
-plots/proposed_v2/feature_importance.png
-results/confusion_matrix_v2.png
+| Figure | Description |
+|--------|-------------|
+| `equity_curve.png` | Cumulative R over time |
+| `threshold_sweep.png` | Performance vs classification threshold |
+| `feature_importance.png` | Top XGBoost features |
+| `confusion_matrix_v2.png` | Model classification accuracy |
+| `DrawDownCurve_Date.pdf` | Drawdown over time |
+| `WinRate_time.pdf` | Win rate by hour of day |
+| `MonthlyPerformace.pdf` | Monthly P&L breakdown |
 
+---
 
-These are referenced in the LaTeX Assignment 3 report.
+## Tech Stack
 
-3) Key Outcomes in Assignment 3
-Model 1 (V1)
+`Python` `XGBoost` `pandas` `numpy` `scikit-learn` `pyarrow` `matplotlib` `LaTeX`
 
-Return: –8.25 R (negative)
+---
 
-Win rate: ~32–35%
+## Author
 
-Didn’t outperform baseline
-
-Reason: Weak feature set + low expressiveness
-
-Model 2 (V2 — Final Model)
-
-Return: +94.92 R (best across entire project)
-
-Win rate: 36.23%
-
-Drawdown: Significantly reduced vs baseline
-
-Trades stable across thresholds (0.3–0.8)
-
-Strong feature engineering + tuning
-
-Baseline Best (A2)
-
-Baseline_D_2R_retrace.csv
-
-Return: 15.58 R
-
-Win rate: ~34%
-
-Model V2 outperformed baseline by 6× in total R.
-
-4) How to Run Assignment 3 from Zero
-(1) Activate environment
-. .\.venv\Scripts\Activate.ps1
-
-(2) Build signals (features)
-python pipelines\signals_v2.py
-
-(3) Train ML model
-python run_experiments_v2.py
-
-(4) Generate all A3 figures for report
-python tools\make_assignment3_figures.py
-
-(5) Compile LaTeX
-
-Your report will reference the PNG/PDF outputs.
-
-5) Summary
-
-Assignment 1 → Data, labeling, pure baseline
-
-Assignment 2 → Optimization, retracement model, 5-year backtest
-
-Assignment 3 → Full ML pipeline (XGBoost), model comparison, huge performance gain
-
-Final Result → Model V2 achieves +94.92 R, highest across all Auralis tests.
+**Muntazir Mehdi** — ML Engineer & Full-Stack Developer  
+[GitHub](https://github.com/muntazir-mehdii) · [Upwork](https://www.upwork.com/freelancers/~015ab18bf2700e35b7)
